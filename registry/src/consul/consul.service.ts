@@ -1,17 +1,17 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import * as Consul from 'consul';
-import { ConsulConfig, ServiceConfig } from './consul.config';
+import Consul from 'consul';
+import type { ConsulConfig, ServiceConfig } from './consul.config';
 
 @Injectable()
 export class ConsulService implements OnModuleDestroy {
   private readonly logger = new Logger(ConsulService.name);
-  private readonly consul: Consul.Consul;
+  private readonly consul: any;
   private registeredServices: Set<string> = new Set();
 
   constructor(private readonly config: ConsulConfig) {
-    this.consul = new Consul({
+    this.consul = new (Consul as any)({
       host: config.host,
-      port: config.port.toString(),
+      port: config.port,
       secure: config.secure || false,
       defaults: config.defaults,
     });
@@ -30,7 +30,7 @@ export class ConsulService implements OnModuleDestroy {
         id: serviceConfig.id,
         name: serviceConfig.name,
         address: serviceConfig.address,
-        port: serviceConfig.port,
+        port: parseInt(serviceConfig.port.toString(), 10),
         tags: serviceConfig.tags || [],
         meta: serviceConfig.meta || {},
       };
@@ -63,7 +63,7 @@ export class ConsulService implements OnModuleDestroy {
       this.logger.error(
         `Failed to register service ${serviceConfig.id}: ${error.message}`,
       );
-      throw error;
+      throw new Error(error.message);
     }
   }
 
@@ -204,7 +204,7 @@ export class ConsulService implements OnModuleDestroy {
   /**
    * Get raw consul client
    */
-  getClient(): Consul.Consul {
+  getClient(): any {
     return this.consul;
   }
 }
