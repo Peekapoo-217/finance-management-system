@@ -56,14 +56,16 @@ export class ConsulService implements OnModuleDestroy {
         }
       }
 
+      this.logger.debug(`Registering service with options: ${JSON.stringify(registerOptions)}`);
       await this.consul.agent.service.register(registerOptions);
       this.registeredServices.add(serviceConfig.id);
       this.logger.log(`Service registered: ${serviceConfig.id}`);
     } catch (error) {
       this.logger.error(
-        `Failed to register service ${serviceConfig.id}: ${error.message}`,
+        `Failed to register service ${serviceConfig.id}: ${error.message || error}`,
       );
-      throw new Error(error.message);
+      this.logger.error(`Error stack: ${error.stack}`);
+      throw new Error(error.message || 'Unknown error');
     }
   }
 
@@ -77,8 +79,9 @@ export class ConsulService implements OnModuleDestroy {
       this.logger.log(`Service deregistered: ${serviceId}`);
     } catch (error) {
       this.logger.error(
-        `Failed to deregister service ${serviceId}: ${error.message}`,
+        `Failed to deregister service ${serviceId}: ${error.message || error}`,
       );
+      this.logger.error(`Error stack: ${error.stack}`);
       throw error;
     }
   }
