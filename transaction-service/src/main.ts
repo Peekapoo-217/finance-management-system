@@ -55,7 +55,7 @@ async function bootstrap() {
   app.enableCors();
   app.useGlobalPipes(new ValidationPipe());
 
-  const port = configService.get<number>('PORT', 3002);
+  const port = configService.get<number>('PORT', 3003);
   const registryUrl = configService.get<string>(
     'REGISTRY_URL',
     'http://localhost:3100',
@@ -64,6 +64,8 @@ async function bootstrap() {
   const serviceName = 'transaction-service';
 
   await app.listen(port);
+  logger.log(`Transaction Service is running on: http://localhost:${port}`);
+  logger.log(`Health Check: http://localhost:${port}/health`);
 
   // Register to Consul
   await registerToConsul(serviceId, serviceName, port, registryUrl, logger);

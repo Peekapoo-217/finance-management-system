@@ -1,17 +1,18 @@
-import { TypeOrmModuleOptions } from '@nestjs/typeorm';
-import { ConfigService } from '@nestjs/config';
+import { registerAs } from '@nestjs/config';
+import { DataSourceOptions } from 'typeorm';
 
-export const getDatabaseConfig = (
-  configService: ConfigService,
-): TypeOrmModuleOptions => ({
-  type: 'mysql',
-  host: configService.get<string>('DB_HOST', 'localhost'),
-  port: configService.get<number>('DB_PORT', 3306),
-  username: configService.get<string>('DB_USERNAME', 'root'),
-  password: configService.get<string>('DB_PASSWORD', ''),
-  database: configService.get<string>('DB_DATABASE', 'transaction_db'),
-  entities: [__dirname + '/../**/*.entity{.ts,.js}'],
-  synchronize: false,
-  logging: true,
+export const databaseConfig = registerAs('database', (): DataSourceOptions => {
+  return {
+    type: 'mysql',
+    host: process.env.DB_HOST,
+    port: parseInt(process.env.DB_PORT || '3306', 10),
+    username: process.env.DB_USERNAME,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_DATABASE,
+    entities: [__dirname + '/../**/*.entity{.ts,.js}'],
+    migrations: [__dirname + '/../database/migrations/*{.ts,.js}'],
+    synchronize: false,
+    logging: process.env.NODE_ENV === 'development',
+  };
 });
 
