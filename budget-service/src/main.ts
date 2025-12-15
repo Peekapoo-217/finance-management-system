@@ -2,7 +2,9 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { MicroserviceOptions } from '@nestjs/microservices';
 import axios from 'axios';
+import { redisConfig } from './config/redis.config';
 
 async function registerToConsul(
   serviceId: string,
@@ -56,6 +58,11 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   const configService = app.get(ConfigService);
+
+  // Kết nối Redis microservice để lắng nghe events
+  app.connectMicroservice<MicroserviceOptions>(redisConfig);
+  await app.startAllMicroservices();
+  logger.log('Redis microservice connected for event listening');
 
   const port = configService.get<number>('PORT', 3002);
   const registryUrl = configService.get<string>('REGISTRY_URL', 'http://localhost:3100');

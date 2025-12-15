@@ -1,26 +1,35 @@
+import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { getDatabaseConfig } from './config/database.config';
+import { ClientsModule } from '@nestjs/microservices';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 import { HealthController } from './health/health.controller';
+import { databaseConfig } from './config/database.config';
+import { redisConfig } from './config/redis.config';
 import { TransactionModule } from './transaction/transaction.module';
-import { Module } from '@nestjs/common';
-import { EventEmitterModule } from '@nestjs/event-emitter';
-import { WalletModule } from './wallet/wallet.module';
+import { WalletModule } from './wallet/wallet.module';  // ← THÊM
 import { CategoryModule } from './category/category.module';
-
 @Module({
   imports: [
-    EventEmitterModule.forRoot(),
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      load: [databaseConfig],
+      envFilePath: '.env',
+    }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: getDatabaseConfig,  // Truyền hàm trực tiếp
-      inject: [ConfigService],     // Inject ConfigService vào factory
+      useFactory: (configService: ConfigService) => ({
+        ...configService.get('database'),
+      }),
+      inject: [ConfigService],
     }),
+    ClientsModule.register([redisConfig]),
+    TransactionModule,
     WalletModule,
     CategoryModule,
-    TransactionModule,
   ],
-  controllers: [HealthController],
+  controllers: [AppController, HealthController],
+  providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }

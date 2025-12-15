@@ -8,7 +8,7 @@ export const AppDataSource = new DataSource({
   port: parseInt(process.env.DB_PORT || '3306', 10),
   username: process.env.DB_USERNAME || 'root',
   password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_DATABASE || 'budget_db',
+  database: process.env.DB_DATABASE || 'finance_budget_service',
   entities: ['src/**/*.entity.ts'],
   migrations: ['src/database/migrations/*.ts'],
   logging: true,
