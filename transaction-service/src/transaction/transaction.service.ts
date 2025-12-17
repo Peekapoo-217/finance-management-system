@@ -7,6 +7,7 @@ import { Wallet } from './entities/wallet.entity';
 import { Category } from './entities/category.entity';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
+import { CategoryType } from './enums';
 
 @Injectable()
 export class TransactionService {
@@ -25,19 +26,57 @@ export class TransactionService {
   ) {}
 
   async create(userId: string, dto: CreateTransactionDto): Promise<Transaction> {
-    // Validate wallet và category thuộc user (trước transaction)
-    const wallet = await this.walletRepository.findOne({ 
-      where: { id: dto.walletId, userId } 
-    });
-    if (!wallet) throw new NotFoundException('Wallet not found');
+    // Chọn ví: ưu tiên walletId, nếu không có sẽ lấy ví đầu tiên của user
+    let wallet: Wallet | null = null;
+    if (dto.walletId) {
+      wallet = await this.walletRepository.findOne({
+        where: { id: dto.walletId, userId }
+      });
+      if (!wallet) throw new NotFoundException('Wallet not found');
+    } else {
+      wallet = await this.walletRepository.findOne({
+        where: { userId },
+        order: { createdAt: 'ASC' },
+      });
+      if (!wallet) throw new NotFoundException('No wallet available for this user');
+    }
 
-    const category = await this.categoryRepository.findOne({ 
-      where: { id: dto.categoryId, userId } 
-    });
-    if (!category) throw new NotFoundException('Category not found');
+    // Xác định category: ưu tiên categoryId, nếu không có thì dùng categoryName + categoryType
+    let category: Category | null = null;
+
+    const looksLikeUuid = (val: string | undefined) =>
+      !!val && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(val);
+
+    if (dto.categoryId && looksLikeUuid(dto.categoryId)) {
+      category = await this.categoryRepository.findOne({
+        where: { id: dto.categoryId, userId }
+      });
+      if (!category) throw new NotFoundException('Category not found');
+    } 
+
+    // Nếu không có category hoặc categoryId không phải UUID -> dùng categoryName + categoryType
+    if (!category) {
+      if (!dto.categoryName || !dto.categoryType) {
+        throw new BadRequestException('categoryName and categoryType are required when categoryId is not provided');
+      }
+
+      category = await this.categoryRepository.findOne({
+        where: { name: dto.categoryName, type: dto.categoryType, userId }
+      });
+
+      if (!category) {
+        // Tạo mới category nội bộ nếu chưa có
+        category = this.categoryRepository.create({
+          name: dto.categoryName,
+          type: dto.categoryType,
+          userId,
+        });
+        category = await this.categoryRepository.save(category);
+      }
+    }
 
     // Validate đủ số dư cho chi tiêu
-    if (category.type === 'expense' && wallet.balance < dto.amount) {
+    if (category.type === CategoryType.EXPENSE && wallet.balance < dto.amount) {
       throw new BadRequestException('Insufficient wallet balance');
     }
 
@@ -57,11 +96,17 @@ export class TransactionService {
       this.logger.debug(`Transaction saved: id=${saved.id}`);
 
       // Bước 2: Cập nhật wallet balance
-      const oldBalance = wallet.balance;
-      if (category.type === 'expense') {
-        wallet.balance -= dto.amount;
+      const amount = Number(dto.amount);
+      const currentBalance = Number(wallet.balance);
+      if (Number.isNaN(amount) || Number.isNaN(currentBalance)) {
+        throw new BadRequestException('Invalid amount or wallet balance');
+      }
+
+      const oldBalance = currentBalance;
+      if (category.type === CategoryType.EXPENSE) {
+        wallet.balance = currentBalance - amount;
       } else {
-        wallet.balance += dto.amount;
+        wallet.balance = currentBalance + amount;
       }
       
       await entityManager.save(Wallet, wallet);
@@ -135,10 +180,20 @@ export class TransactionService {
     await this.dataSource.transaction(async (entityManager) => {
       // Bước 1: Rollback wallet balance
       const wallet = transaction.wallet;
-      if (transaction.category.type === 'expense') {
-        wallet.balance += transaction.amount; // Hoàn trả tiền
+      if (!wallet) {
+        throw new NotFoundException('Wallet not found for transaction');
+      }
+
+      const amount = Number(transaction.amount);
+      const currentBalance = Number(wallet.balance);
+      if (Number.isNaN(amount) || Number.isNaN(currentBalance)) {
+        throw new BadRequestException('Invalid amount or wallet balance');
+      }
+
+      if (transaction.category.type === CategoryType.EXPENSE) {
+        wallet.balance = currentBalance + amount; // Hoàn trả tiền
       } else {
-        wallet.balance -= transaction.amount; // Trừ tiền đã cộng
+        wallet.balance = currentBalance - amount; // Trừ tiền đã cộng
       }
       
       await entityManager.save(Wallet, wallet);

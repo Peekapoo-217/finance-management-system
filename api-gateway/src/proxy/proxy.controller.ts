@@ -50,8 +50,16 @@ export class ProxyController {
 
         // Remove service prefix and reconstruct path
         const remainingSegments = segments.slice(1);
-        const targetPath = '/' + prefix + (remainingSegments.length > 0 ? '/' + remainingSegments.join('/') : '');
-        
+
+        // For auth-service, keep the /auth prefix because controllers are under /auth/...
+        let targetPath: string;
+        if (prefix === 'auth') {
+            targetPath = '/' + prefix + (remainingSegments.length > 0 ? '/' + remainingSegments.join('/') : '');
+        } else {
+            // For other services (transaction, budget, etc.), controllers are already at root (e.g., /transactions)
+            targetPath = remainingSegments.length > 0 ? '/' + remainingSegments.join('/') : '/';
+        }
+
         // Add query string back if exists
         const finalPath = queryString ? `${targetPath}?${queryString}` : targetPath;
 

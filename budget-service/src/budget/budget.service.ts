@@ -96,6 +96,34 @@ export class BudgetService {
     }
   }
 
+  async rollbackSpentAmountFromTransaction(
+    userId: string,
+    categoryId: string,
+    amount: number,
+    transactionDate: Date,
+  ): Promise<void> {
+    const categoryIdNum = parseInt(categoryId, 10);
+    if (isNaN(categoryIdNum)) {
+      this.logger.warn(`Invalid categoryId: ${categoryId}`);
+      return;
+    }
+
+    const budgets = await this.budgetRepository.find({
+      where: { categoryId: categoryIdNum },
+    });
+
+    for (const budget of budgets) {
+      if (this.isDateInPeriod(transactionDate, budget.period)) {
+        budget.spentAmount = Math.max(0, budget.spentAmount - amount);
+        await this.budgetRepository.save(budget);
+        this.logger.log(
+          `Rolled back budget spent: Budget ${budget.id}, -${amount}, new spent=${budget.spentAmount}`,
+        );
+        break;
+      }
+    }
+  }
+
   private isDateInPeriod(date: Date, period: BudgetPeriod): boolean {
     const now = new Date();
     const year = date.getFullYear();

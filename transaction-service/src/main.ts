@@ -53,7 +53,7 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   app.enableCors();
-  app.useGlobalPipes(new ValidationPipe());
+  app.useGlobalPipes(new ValidationPipe({ whitelist: false, forbidNonWhitelisted: false }));
 
   const port = configService.get<number>('PORT', 3003);
   const registryUrl = configService.get<string>(

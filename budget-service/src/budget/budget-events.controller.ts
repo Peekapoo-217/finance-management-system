@@ -47,5 +47,37 @@ export class BudgetEventsController {
       this.logger.error(`Failed to update budget: ${error.message}`, error.stack);
     }
   }
+
+  @EventPattern('transaction.deleted')
+  async handleTransactionDeleted(@Payload() data: any) {
+    const { userId, categoryName, amount, type, date } = data;
+
+    this.logger.log(
+      `Received transaction.deleted event: userId=${userId}, categoryName=${categoryName}, amount=${amount}, type=${type}`,
+    );
+
+    if (type !== 'expense') {
+      this.logger.debug('Skipping non-expense transaction delete');
+      return;
+    }
+
+    try {
+      const category = await this.categoryService.findByName(categoryName);
+      if (!category) {
+        this.logger.warn(`Category not found in Budget Service: ${categoryName}`);
+        return;
+      }
+
+      await this.budgetService.rollbackSpentAmountFromTransaction(
+        userId,
+        category.id.toString(),
+        amount,
+        new Date(date),
+      );
+      this.logger.log(`Budget rolled back successfully for category: ${categoryName}`);
+    } catch (error) {
+      this.logger.error(`Failed to rollback budget: ${error.message}`, error.stack);
+    }
+  }
 }
 
