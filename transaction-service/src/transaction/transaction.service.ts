@@ -157,18 +157,166 @@ export class TransactionService {
   }
 
   async update(id: string, userId: string, dto: UpdateTransactionDto): Promise<Transaction> {
-    const transaction = await this.findOne(id, userId);
+    const oldTransaction = await this.findOne(id, userId);
     
+    // Lưu thông tin cũ để rollback budget
+    const oldAmount = Number(oldTransaction.amount);
+    const oldCategoryName = oldTransaction.category.name;
+    const oldCategoryType = oldTransaction.category.type;
+    const oldDate = oldTransaction.transactionDate;
+
     // Nếu chỉ update thông tin đơn giản (description, date), không cần transaction
-    if (!dto.amount && !dto.walletId && !dto.categoryId) {
-      Object.assign(transaction, dto);
-      return this.transactionRepository.save(transaction);
+    if (!dto.amount && !dto.walletId && !dto.categoryId && !dto.categoryName && !dto.categoryType) {
+      Object.assign(oldTransaction, dto);
+      const updated = await this.transactionRepository.save(oldTransaction);
+      
+      // Nếu chỉ đổi date và là expense, cần rollback budget cũ và update budget mới
+      if (dto.transactionDate && oldCategoryType === CategoryType.EXPENSE) {
+        try {
+          this.redisClient.emit('transaction.updated', {
+            userId,
+            transactionId: id,
+            oldData: {
+              categoryName: oldCategoryName,
+              amount: oldAmount,
+              type: oldCategoryType,
+              date: oldDate,
+            },
+            newData: {
+              categoryName: oldCategoryName,
+              amount: oldAmount,
+              type: oldCategoryType,
+              date: dto.transactionDate,
+            },
+          });
+        } catch (error) {
+          this.logger.error(`Failed to emit update event:`, error);
+        }
+      }
+      
+      return updated;
     }
 
     // Nếu update amount/wallet/category → cần recalculate wallet balance
-    // TODO: Implement proper update with wallet balance adjustment
-    this.logger.warn('Update amount/wallet/category not fully implemented yet');
-    throw new BadRequestException('Cannot update transaction amount, wallet, or category at this time');
+    // Bước 1: Rollback wallet balance của transaction cũ
+    const oldWallet = oldTransaction.wallet;
+    const oldCategory = oldTransaction.category;
+    
+    // Bước 2: Tìm wallet và category mới (nếu có thay đổi)
+    let newWallet: Wallet = oldWallet;
+    if (dto.walletId && dto.walletId !== oldTransaction.walletId) {
+      const foundWallet = await this.walletRepository.findOne({
+        where: { id: dto.walletId, userId }
+      });
+      if (!foundWallet) {
+        throw new NotFoundException('New wallet not found');
+      }
+      newWallet = foundWallet;
+    }
+
+    let newCategory: Category = oldCategory;
+    const looksLikeUuid = (val: string | undefined) =>
+      !!val && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(val);
+
+    if (dto.categoryId && looksLikeUuid(dto.categoryId) && dto.categoryId !== oldTransaction.categoryId) {
+      const foundCategory = await this.categoryRepository.findOne({
+        where: { id: dto.categoryId, userId }
+      });
+      if (!foundCategory) {
+        throw new NotFoundException('New category not found');
+      }
+      newCategory = foundCategory;
+    } else if (dto.categoryName && dto.categoryType) {
+      let foundCategory = await this.categoryRepository.findOne({
+        where: { name: dto.categoryName, type: dto.categoryType, userId }
+      });
+      if (!foundCategory) {
+        foundCategory = this.categoryRepository.create({
+          name: dto.categoryName,
+          type: dto.categoryType,
+          userId,
+        });
+        foundCategory = await this.categoryRepository.save(foundCategory);
+      }
+      newCategory = foundCategory;
+    }
+
+    const newAmount = dto.amount ? Number(dto.amount) : oldAmount;
+    const newDate = dto.transactionDate ? new Date(dto.transactionDate) : oldDate;
+
+    // Validate đủ số dư cho chi tiêu mới
+    if (newCategory.type === CategoryType.EXPENSE && newWallet.balance < newAmount) {
+      throw new BadRequestException('Insufficient wallet balance');
+    }
+
+    // WRAP TRONG DATABASE TRANSACTION để đảm bảo atomic operations
+    const result = await this.dataSource.transaction(async (entityManager) => {
+      // Bước 1: Rollback wallet balance cũ
+      const oldWalletBalance = Number(oldWallet.balance);
+      if (oldCategory.type === CategoryType.EXPENSE) {
+        oldWallet.balance = oldWalletBalance + oldAmount; // Hoàn trả tiền
+      } else {
+        oldWallet.balance = oldWalletBalance - oldAmount; // Trừ tiền đã cộng
+      }
+      await entityManager.save(Wallet, oldWallet);
+
+      // Bước 2: Cập nhật wallet balance mới (nếu wallet khác)
+      if (newWallet.id !== oldWallet.id) {
+        const newWalletBalance = Number(newWallet.balance);
+        if (newCategory.type === CategoryType.EXPENSE) {
+          newWallet.balance = newWalletBalance - newAmount;
+        } else {
+          newWallet.balance = newWalletBalance + newAmount;
+        }
+        await entityManager.save(Wallet, newWallet);
+      } else {
+        // Cùng wallet, cập nhật balance dựa trên sự khác biệt
+        const currentBalance = Number(newWallet.balance);
+        if (newCategory.type === CategoryType.EXPENSE) {
+          newWallet.balance = currentBalance - newAmount;
+        } else {
+          newWallet.balance = currentBalance + newAmount;
+        }
+        await entityManager.save(Wallet, newWallet);
+      }
+
+      // Bước 3: Cập nhật transaction
+      Object.assign(oldTransaction, {
+        ...dto,
+        wallet: newWallet,
+        category: newCategory,
+        amount: newAmount,
+        transactionDate: newDate,
+      });
+      const updated = await entityManager.save(Transaction, oldTransaction);
+
+      return updated;
+    });
+
+    // Emit event để budget-service cập nhật
+    try {
+      this.redisClient.emit('transaction.updated', {
+        userId,
+        transactionId: id,
+        oldData: {
+          categoryName: oldCategoryName,
+          amount: oldAmount,
+          type: oldCategoryType,
+          date: oldDate,
+        },
+        newData: {
+          categoryName: newCategory.name,
+          amount: newAmount,
+          type: newCategory.type,
+          date: newDate,
+        },
+      });
+      this.logger.log(`Event emitted: transaction.updated for id=${id}`);
+    } catch (error) {
+      this.logger.error(`Failed to emit update event:`, error);
+    }
+
+    return result;
   }
 
   async remove(id: string, userId: string): Promise<void> {
@@ -212,10 +360,12 @@ export class TransactionService {
         userId,
         transactionId: id,
         categoryId: transaction.category.id,
+        categoryName: transaction.category.name, 
         amount: transaction.amount,
         type: transaction.category.type,
+        date: transaction.transactionDate,
       });
-      this.logger.log(`Event emitted: transaction.deleted for id=${id}`);
+      this.logger.log(`Event emitted: transaction.deleted for id=${id}, category=${transaction.category.name}`);
     } catch (error) {
       this.logger.error(`Failed to emit deletion event for transaction ${id}:`, error);
     }

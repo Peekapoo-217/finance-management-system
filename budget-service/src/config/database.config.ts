@@ -11,7 +11,7 @@ export const getDatabaseConfig = (
   password: configService.get<string>('DB_PASSWORD', ''),
   database: configService.get<string>('DB_DATABASE', 'finance_budget_service'),
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
-  synchronize: true,
+  synchronize: false, // Tắt synchronize để dùng migration
   logging: true,
 });
 

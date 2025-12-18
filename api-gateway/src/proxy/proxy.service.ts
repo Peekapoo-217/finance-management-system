@@ -62,6 +62,8 @@ export class ProxyService {
             delete cleanHeaders['if-modified-since'];
             delete cleanHeaders['if-none-match'];
             delete cleanHeaders['cache-control'];
+            delete cleanHeaders['host'];
+            delete cleanHeaders['content-length'];
 
             const config: AxiosRequestConfig = {
                 method: method.toLowerCase() as any,
@@ -73,7 +75,7 @@ export class ProxyService {
                     'Cache-Control': 'no-cache',
                 },
                 params: queryParams,
-                validateStatus: (status) => status >= 200 && status < 400,
+                validateStatus: () => true, // Accept all status codes to handle errors properly
             };
 
             if (body && ['post', 'put', 'patch'].includes(method.toLowerCase())) {
@@ -82,11 +84,21 @@ export class ProxyService {
 
             const response = await axios.request(config);
 
+            // Check if response status indicates an error
+            if (response.status >= 400) {
+                this.logger.error(`Error forwarding request to ${serviceName}: Status ${response.status}`);
+                throw new HttpException(
+                    response.data || { message: `Error from ${serviceName}` },
+                    response.status,
+                );
+            }
+
             return response.data;
         } catch (error) {
             if (error.response && error.response.status >= 400) {
                 this.logger.error(`Error forwarding request to ${serviceName}: ${error.message}`);
-                this.logger.error(`URL: ${error.config?.url}, Status: ${error.response.status}`);
+            } else if (error instanceof HttpException) {
+                throw error;
             } else {
                 this.logger.warn(`Request to ${serviceName} failed: ${error.message}`);
             }
@@ -95,13 +107,13 @@ export class ProxyService {
 
             if (error.response) {
                 throw new HttpException(
-                    error.response.data,
+                    error.response.data || { message: error.message },
                     error.response.status,
                 );
             }
 
             throw new HttpException(
-                `Service ${serviceName} is unavailable`,
+                `Service ${serviceName} is unavailable: ${error.message}`,
                 HttpStatus.SERVICE_UNAVAILABLE,
             );
         }

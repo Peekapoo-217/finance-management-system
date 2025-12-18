@@ -24,6 +24,20 @@ export class AuthController {
     return this.authService.validateUser(req.user.userId);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('validate')
+  async validateToken(@Request() req) {
+    // Endpoint để các service khác validate token
+    return {
+      valid: true,
+      user: {
+        userId: req.user.userId,
+        email: req.user.email,
+        role: req.user.role,
+      },
+    };
+  }
+
   @Get('health')
   health() {
     return { status: 'ok', service: 'auth-service' };

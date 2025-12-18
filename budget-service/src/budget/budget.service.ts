@@ -15,7 +15,7 @@ export class BudgetService {
     private budgetRepository: Repository<Budget>,
   ) {}
 
- async create(userId: number, dto: CreateBudgetDto): Promise<Budget> {
+ async create(userId: string, dto: CreateBudgetDto): Promise<Budget> {
     const budget = new Budget();
     budget.userId = userId;
     budget.categoryId = dto.categoryId;
@@ -26,14 +26,14 @@ export class BudgetService {
     return await this.budgetRepository.save(budget);
   }
 
- async findAll(userId: number): Promise<any[]> {
+ async findAll(userId: string): Promise<any[]> {
   return await this.budgetRepository.find({
     where: { userId },
     relations: ['category'],  // Join để lấy tên category
   });
 }
 
-  async findOne(id: number, userId: number): Promise<Budget> {
+  async findOne(id: string, userId: string): Promise<Budget> {
   const budget = await this.budgetRepository.findOne({
     where: { id, userId },
     relations: ['category'],  // Join
@@ -42,7 +42,7 @@ export class BudgetService {
   return budget;
 }
 
- async update(id: number, userId: number, dto: UpdateBudgetDto): Promise<Budget> {
+ async update(id: string, userId: string, dto: UpdateBudgetDto): Promise<Budget> {
     const budget = await this.findOne(id, userId);
 
     if (dto.categoryId !== undefined) budget.categoryId = dto.categoryId;
@@ -52,7 +52,7 @@ export class BudgetService {
     return await this.budgetRepository.save(budget);
   }
 
-  async remove(id: number, userId: number): Promise<void> {
+  async remove(id: string, userId: string): Promise<void> {
     const result = await this.budgetRepository.delete({ id, userId });
     if (result.affected === 0) throw new NotFoundException('Budget not found');
   }
@@ -63,6 +63,13 @@ export class BudgetService {
     amount: number,
     transactionDate: Date,
   ): Promise<void> {
+    // Đảm bảo amount là number hợp lệ
+    const amountNum = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      this.logger.warn(`Invalid amount: ${amount}, skipping budget update`);
+      return;
+    }
+
     // Parse categoryId to number
     const categoryIdNum = parseInt(categoryId, 10);
     
@@ -71,28 +78,57 @@ export class BudgetService {
       return;
     }
 
-    // For now, skip userId filter since it's "test-user-id" (string)
-    // In production, you should have proper user ID mapping
+    // Filter theo userId và categoryId
     const budgets = await this.budgetRepository.find({
-      where: {
-        categoryId: categoryIdNum,
+      where: { 
+        userId: userId,
+        categoryId: categoryIdNum 
       },
     });
 
-    for (const budget of budgets) {
-      if (this.isDateInPeriod(transactionDate, budget.period)) {
-        budget.spentAmount += amount;
-        await this.budgetRepository.save(budget);
+    this.logger.log(
+      `Found ${budgets.length} budgets for userId=${userId}, categoryId=${categoryIdNum}, transactionDate=${transactionDate.toISOString()}, amount=${amountNum}`
+    );
 
-        if (budget.spentAmount > budget.limitAmount) {
+    if (budgets.length === 0) {
+      this.logger.warn(`No budgets found for userId=${userId}, categoryId=${categoryIdNum}`);
+      return;
+    }
+
+    let updated = false;
+    for (const budget of budgets) {
+      const isInPeriod = this.isDateInPeriod(transactionDate, budget.period);
+      this.logger.log(
+        `Budget ${budget.id}: userId=${budget.userId}, period=${budget.period}, isInPeriod=${isInPeriod}, currentSpentAmount=${budget.spentAmount}, adding=${amountNum}`
+      );
+
+      if (isInPeriod) {
+        const oldSpentAmount = Number(budget.spentAmount);
+        const newSpentAmount = oldSpentAmount + amountNum;
+        budget.spentAmount = newSpentAmount;
+        await this.budgetRepository.save(budget);
+        updated = true;
+
+        this.logger.log(
+          `Budget ${budget.id} updated: spentAmount ${oldSpentAmount} -> ${newSpentAmount} (added ${amountNum})`
+        );
+
+        if (newSpentAmount > budget.limitAmount) {
           this.logger.warn(
             `Budget exceeded! User: ${userId}, Budget: ${budget.id}, ` +
-            `Limit: ${budget.limitAmount}, Spent: ${budget.spentAmount}`,
+            `Limit: ${budget.limitAmount}, Spent: ${newSpentAmount}`,
           );
-          // TODO: Emit 'budget.exceeded' event qua Redis nếu cần notify service khác
         }
         break;
       }
+    }
+
+    if (!updated) {
+      this.logger.warn(
+        `No budget updated for categoryId=${categoryIdNum}. ` +
+        `Found ${budgets.length} budgets but none matched the period. ` +
+        `Transaction date: ${transactionDate.toISOString()}`
+      );
     }
   }
 
@@ -102,14 +138,25 @@ export class BudgetService {
     amount: number,
     transactionDate: Date,
   ): Promise<void> {
+    // Đảm bảo amount là number hợp lệ
+    const amountNum = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      this.logger.warn(`Invalid amount: ${amount}, skipping budget rollback`);
+      return;
+    }
+
     const categoryIdNum = parseInt(categoryId, 10);
     if (isNaN(categoryIdNum)) {
       this.logger.warn(`Invalid categoryId: ${categoryId}`);
       return;
     }
 
+    // Filter theo userId và categoryId
     const budgets = await this.budgetRepository.find({
-      where: { categoryId: categoryIdNum },
+      where: { 
+        userId: userId,
+        categoryId: categoryIdNum 
+      },
     });
 
     for (const budget of budgets) {
@@ -126,18 +173,46 @@ export class BudgetService {
 
   private isDateInPeriod(date: Date, period: BudgetPeriod): boolean {
     const now = new Date();
-    const year = date.getFullYear();
-    const month = date.getMonth();
+    const transactionYear = date.getFullYear();
+    const transactionMonth = date.getMonth();
+    const transactionDay = date.getDate();
+    const nowYear = now.getFullYear();
+    const nowMonth = now.getMonth();
+    const nowDay = now.getDate();
 
     switch (period) {
       case BudgetPeriod.WEEKLY:
+        // Tính đầu tuần (Chủ nhật) và cuối tuần (Thứ 7)
         const startOfWeek = new Date(now);
-        startOfWeek.setDate(now.getDate() - now.getDay());
-        return date >= startOfWeek;
+        startOfWeek.setDate(now.getDate() - now.getDay()); // Chủ nhật
+        startOfWeek.setHours(0, 0, 0, 0);
+        
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(startOfWeek.getDate() + 6); // Thứ 7
+        endOfWeek.setHours(23, 59, 59, 999);
+        
+        const transactionDateOnly = new Date(date);
+        transactionDateOnly.setHours(0, 0, 0, 0);
+        
+        const isInWeek = transactionDateOnly >= startOfWeek && transactionDateOnly <= endOfWeek;
+        this.logger.log(
+          `WEEKLY check: transaction=${transactionDateOnly.toISOString()}, startOfWeek=${startOfWeek.toISOString()}, endOfWeek=${endOfWeek.toISOString()}, isInWeek=${isInWeek}`
+        );
+        return isInWeek;
       case BudgetPeriod.MONTHLY:
-        return date.getMonth() === month && date.getFullYear() === year;
+        // Kiểm tra transaction date có cùng tháng và năm với hiện tại không
+        const isInMonth = transactionMonth === nowMonth && transactionYear === nowYear;
+        this.logger.log(
+          `MONTHLY check: transaction=${transactionMonth}/${transactionYear}, now=${nowMonth}/${nowYear}, isInMonth=${isInMonth}`
+        );
+        return isInMonth;
       case BudgetPeriod.YEARLY:
-        return date.getFullYear() === year;
+        // Kiểm tra transaction date có cùng năm với hiện tại không
+        const isInYear = transactionYear === nowYear;
+        this.logger.log(
+          `YEARLY check: transaction=${transactionYear}, now=${nowYear}, isInYear=${isInYear}`
+        );
+        return isInYear;
       default:
         return false;
     }

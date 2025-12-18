@@ -50,10 +50,27 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const isPasswordValid = await bcrypt.compare(
-      loginDto.password,
-      user.password,
-    );
+    // Check if password is already hashed (bcrypt hashes start with $2a$, $2b$, or $2y$)
+    const isPasswordHashed = user.password.startsWith('$2a$') || 
+                            user.password.startsWith('$2b$') || 
+                            user.password.startsWith('$2y$');
+
+    let isPasswordValid: boolean;
+
+    if (isPasswordHashed) {
+      // Password is already hashed, use bcrypt.compare
+      isPasswordValid = await bcrypt.compare(loginDto.password, user.password);
+    } else {
+      // Legacy plain text password - compare directly and then hash it
+      isPasswordValid = loginDto.password === user.password;
+      
+      if (isPasswordValid) {
+        // Hash the password and update it in the database
+        const hashedPassword = await bcrypt.hash(loginDto.password, 10);
+        user.password = hashedPassword;
+        await this.userRepository.save(user);
+      }
+    }
 
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');

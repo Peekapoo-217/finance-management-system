@@ -12,6 +12,9 @@ export class User {
   @PrimaryColumn({ type: 'varchar', length: 36 })
   id!: string;
 
+  @Column({ length: 255, nullable: true })
+  name?: string;
+
   @Column({ unique: true, length: 255 })
   email!: string;
 
