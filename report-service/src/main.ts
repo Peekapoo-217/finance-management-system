@@ -4,6 +4,7 @@ import { AppModule } from './app.module';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { redisMicroserviceConfig } from './config/redis.config';
 
 async function registerToConsul(
   serviceId: string,
@@ -54,8 +55,17 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
 
+  // Kết nối Redis microservice để lắng nghe events
+  app.connectMicroservice(redisMicroserviceConfig);
+  await app.startAllMicroservices();
+  logger.log('Redis microservice connected for event listening');
+
   app.enableCors();
-  app.useGlobalPipes(new ValidationPipe());
+  app.useGlobalPipes(new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: false,
+    transform: true,
+  }));
 
   const port = configService.get<number>('PORT', 3004);
   const registryUrl = configService.get<string>(

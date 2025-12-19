@@ -57,6 +57,15 @@ export class BudgetService {
     if (result.affected === 0) throw new NotFoundException('Budget not found');
   }
 
+  async hasBudgetForCategory(userId: string, categoryName: string): Promise<boolean> {
+    const budgets = await this.budgetRepository.find({
+      where: { userId },
+      relations: ['category'],
+    });
+
+    return budgets.some(budget => budget.category?.name === categoryName);
+  }
+
   async updateSpentAmountFromTransaction(
     userId: string,
     categoryId: string,

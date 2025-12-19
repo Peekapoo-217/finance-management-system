@@ -53,4 +53,14 @@ export class BudgetController {
     }
     return this.budgetService.remove(id, userId);
   }
+
+  @Get('check/:categoryName')
+  async checkBudget(@Param('categoryName') categoryName: string, @Request() req: any) {
+    const userId = req.user?.userId || req.user?.id;
+    if (!userId) {
+      throw new UnauthorizedException('User ID not found in token');
+    }
+    const hasBudget = await this.budgetService.hasBudgetForCategory(userId, categoryName);
+    return { hasBudget, categoryName };
+  }
 }

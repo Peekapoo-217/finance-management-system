@@ -1,15 +1,15 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { JwtModule } from '@nestjs/jwt';
-import { PassportModule } from '@nestjs/passport';
+import { ClientsModule } from '@nestjs/microservices';
 import { HttpModule } from '@nestjs/axios';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { databaseConfig } from './config/database.config';
+import { redisConfig } from './config/redis.config';
 import { ReportModule } from './report/report.module';
 import { HealthModule } from './health/health.module'; 
-import { JwtStrategy } from './guards/jwt.strategy';
+import { ConsulClientService } from './consul/consul-client.service';
 
 @Module({
   imports: [
@@ -20,22 +20,13 @@ import { JwtStrategy } from './guards/jwt.strategy';
       inject: [ConfigService],
     }),
     TypeOrmModule.forFeature([]),
-    PassportModule.register({ defaultStrategy: 'jwt' }),
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { 
-          expiresIn: configService.get<string>('JWT_EXPIRES_IN', '1d') as any
-        },
-      }),
-      inject: [ConfigService],
-    }),
+    ClientsModule.register([redisConfig]),
     HttpModule,
     ReportModule,
     HealthModule, 
   ],
   controllers: [AppController],
-  providers: [AppService, JwtStrategy],
+  providers: [AppService, ConsulClientService],
+  exports: [ConsulClientService],
 })
 export class AppModule {}
