@@ -2,6 +2,8 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -101,5 +103,45 @@ export class AuthService {
     const { password, ...result } = user;
     return result;
   }
+
+  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+  const user = await this.userRepository.findOne({ where: { id: userId } });
+
+  if (!user) {
+    throw new UnauthorizedException('User not found');
+  }
+
+  const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+  if (!isPasswordValid) {
+    throw new BadRequestException('Mật khẩu hiện tại không đúng');
+  }
+
+  if (currentPassword === newPassword) {
+    throw new BadRequestException('Mật khẩu mới phải khác mật khẩu hiện tại');
+  }
+
+  const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+  user.password = hashedNewPassword;
+  await this.userRepository.save(user);
+
+  return { message: 'Đổi mật khẩu thành công' };
+}
+
+async updateProfile(userId: string, updateData: { name?: string }) {
+  const user = await this.userRepository.findOne({ where: { id: userId } });
+
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+
+  if (updateData.name !== undefined) {
+    user.name = updateData.name || undefined;
+  }
+
+  await this.userRepository.save(user);
+
+  const { password, ...result } = user;
+  return result;
+}
 }
 
