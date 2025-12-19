@@ -2,12 +2,15 @@ import { Injectable, NotFoundException, BadRequestException, Inject, Logger } fr
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { ClientProxy } from '@nestjs/microservices';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
 import { Transaction } from './entities/transaction.entity';
 import { Wallet } from './entities/wallet.entity';
 import { Category } from './entities/category.entity';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { CategoryType } from './enums';
+import { ConsulClientService } from '../consul/consul-client.service';
 
 @Injectable()
 export class TransactionService {
@@ -23,9 +26,11 @@ export class TransactionService {
     @Inject('REDIS_SERVICE')
     private redisClient: ClientProxy,
     private dataSource: DataSource,
+    private httpService: HttpService,
+    private consulClient: ConsulClientService,
   ) {}
 
-  async create(userId: string, dto: CreateTransactionDto): Promise<Transaction> {
+  async create(userId: string, dto: CreateTransactionDto, authToken?: string): Promise<Transaction> {
     // Chọn ví: ưu tiên walletId, nếu không có sẽ lấy ví đầu tiên của user
     let wallet: Wallet | null = null;
     if (dto.walletId) {
@@ -78,6 +83,37 @@ export class TransactionService {
     // Validate đủ số dư cho chi tiêu
     if (category.type === CategoryType.EXPENSE && wallet.balance < dto.amount) {
       throw new BadRequestException('Insufficient wallet balance');
+    }
+
+    // Validate: Nếu là expense, phải có budget trước
+    if (category.type === CategoryType.EXPENSE) {
+      try {
+        const budgetServiceUrl = await this.consulClient.resolveService('budget-service');
+        
+        // Pass user's token để budget-service có thể lấy userId và check budget của đúng user
+        const checkResponse = await firstValueFrom(
+          this.httpService.get(`${budgetServiceUrl}/budgets/check/${encodeURIComponent(category.name)}`, {
+            headers: {
+              Authorization: authToken || 'Bearer dummy-token',
+              'Content-Type': 'application/json',
+            },
+          }),
+        );
+
+        const hasBudget = checkResponse.data?.hasBudget;
+        if (!hasBudget) {
+          throw new BadRequestException(
+            `Danh mục "${category.name}" chưa có ngân sách. Vui lòng tạo ngân sách trước khi thêm giao dịch.`
+          );
+        }
+      } catch (error: any) {
+        // Nếu lỗi là BadRequestException từ validation -> throw lại
+        if (error.response?.status === 400 || error.message?.includes('chưa có ngân sách')) {
+          throw error;
+        }
+        // Nếu lỗi khác (network, service unavailable) -> log và cho phép tạo transaction
+        this.logger.warn(`Failed to check budget for category ${category.name}: ${error.message}`);
+      }
     }
 
     this.logger.log(`Creating transaction: userId=${userId}, amount=${dto.amount}, type=${category.type}`);

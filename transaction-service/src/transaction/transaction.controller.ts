@@ -12,7 +12,8 @@ export class TransactionController {
   @Post()
   create(@Body() dto: CreateTransactionDto, @Request() req: any) {
     const userId = req.user?.userId || 'test-user-id';
-    return this.transactionService.create(userId, dto);
+    const authToken = req.headers.authorization;
+    return this.transactionService.create(userId, dto, authToken);
   }
 
   @Get()

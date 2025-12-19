@@ -7,7 +7,7 @@ export const databaseConfig = (configService: ConfigService): TypeOrmModuleOptio
   port: configService.get<number>('DB_PORT', 3306),
   username: configService.get<string>('DB_USERNAME', 'root'),
   password: configService.get<string>('DB_PASSWORD', ''),
-  database: configService.get<string>('DB_DATABASE', 'finance_report_db'),
+  database: configService.get<string>('DB_DATABASE', 'finance_report_service'),
   entities: [__dirname + '/../database/entities/*.entity{.ts,.js}'],
   synchronize: configService.get<string>('NODE_ENV') !== 'production',
   migrations: [__dirname + '/../database/migrations/*{.ts,.js}'],
