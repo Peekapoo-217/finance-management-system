@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import axios from 'axios';
 import { redisMicroserviceConfig } from './config/redis.config';
 
@@ -55,6 +56,17 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
 
+  // Swagger Configuration
+  const config = new DocumentBuilder()
+    .setTitle('Report Service API')
+    .setDescription('API documentation for Financial Reports & Analytics Service')
+    .setVersion('1.0')
+    .addTag('reports', 'Financial report generation endpoints')
+    .addBearerAuth()
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api', app, document);
+
   // Kết nối Redis microservice để lắng nghe events
   app.connectMicroservice(redisMicroserviceConfig);
   await app.startAllMicroservices();
@@ -78,6 +90,7 @@ async function bootstrap() {
   await app.listen(port);
   logger.log(`Report Service is running on: http://localhost:${port}`);
   logger.log(`Health Check: http://localhost:${port}/report/health`);
+  logger.log(`Swagger API Docs: http://localhost:${port}/api`);
 
   // Register to Consul
   await registerToConsul(serviceId, serviceName, port, registryUrl, logger);

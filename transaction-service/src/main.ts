@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import axios from 'axios';
 import { redisMicroserviceConfig } from './config/redis.config';
 
@@ -53,6 +54,19 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
 
+  // Swagger Configuration
+  const config = new DocumentBuilder()
+    .setTitle('Transaction Service API')
+    .setDescription('API documentation for Transaction & Wallet Management Service')
+    .setVersion('1.0')
+    .addTag('transactions', 'Transaction management endpoints')
+    .addTag('wallets', 'Wallet management endpoints')
+    .addTag('categories', 'Category management endpoints')
+    .addBearerAuth()
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api', app, document);
+
   // Kết nối Redis microservice để lắng nghe events
   app.connectMicroservice(redisMicroserviceConfig);
   await app.startAllMicroservices();
@@ -72,6 +86,7 @@ async function bootstrap() {
   await app.listen(port);
   logger.log(`Transaction Service is running on: http://localhost:${port}`);
   logger.log(`Health Check: http://localhost:${port}/health`);
+  logger.log(`Swagger API Docs: http://localhost:${port}/api`);
 
   // Register to Consul
   await registerToConsul(serviceId, serviceName, port, registryUrl, logger);

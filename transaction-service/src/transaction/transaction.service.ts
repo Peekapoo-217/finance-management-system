@@ -28,7 +28,7 @@ export class TransactionService {
     private dataSource: DataSource,
     private httpService: HttpService,
     private consulClient: ConsulClientService,
-  ) {}
+  ) { }
 
   async create(userId: string, dto: CreateTransactionDto, authToken?: string): Promise<Transaction> {
     // Chọn ví: ưu tiên walletId, nếu không có sẽ lấy ví đầu tiên của user
@@ -57,7 +57,7 @@ export class TransactionService {
         where: { id: dto.categoryId, userId }
       });
       if (!category) throw new NotFoundException('Category not found');
-    } 
+    }
 
     // Nếu không có category hoặc categoryId không phải UUID -> dùng categoryName + categoryType
     if (!category) {
@@ -89,7 +89,7 @@ export class TransactionService {
     if (category.type === CategoryType.EXPENSE) {
       try {
         const budgetServiceUrl = await this.consulClient.resolveService('budget-service');
-        
+
         // Pass user's token để budget-service có thể lấy userId và check budget của đúng user
         const checkResponse = await firstValueFrom(
           this.httpService.get(`${budgetServiceUrl}/budgets/check/${encodeURIComponent(category.name)}`, {
@@ -144,7 +144,7 @@ export class TransactionService {
       } else {
         wallet.balance = currentBalance + amount;
       }
-      
+
       await entityManager.save(Wallet, wallet);
       this.logger.debug(
         `Wallet updated: id=${wallet.id}, oldBalance=${oldBalance}, newBalance=${wallet.balance}`
@@ -194,7 +194,7 @@ export class TransactionService {
 
   async update(id: string, userId: string, dto: UpdateTransactionDto): Promise<Transaction> {
     const oldTransaction = await this.findOne(id, userId);
-    
+
     // Lưu thông tin cũ để rollback budget
     const oldAmount = Number(oldTransaction.amount);
     const oldCategoryName = oldTransaction.category.name;
@@ -205,7 +205,7 @@ export class TransactionService {
     if (!dto.amount && !dto.walletId && !dto.categoryId && !dto.categoryName && !dto.categoryType) {
       Object.assign(oldTransaction, dto);
       const updated = await this.transactionRepository.save(oldTransaction);
-      
+
       // Nếu chỉ đổi date và là expense, cần rollback budget cũ và update budget mới
       if (dto.transactionDate && oldCategoryType === CategoryType.EXPENSE) {
         try {
@@ -229,7 +229,7 @@ export class TransactionService {
           this.logger.error(`Failed to emit update event:`, error);
         }
       }
-      
+
       return updated;
     }
 
@@ -237,7 +237,7 @@ export class TransactionService {
     // Bước 1: Rollback wallet balance của transaction cũ
     const oldWallet = oldTransaction.wallet;
     const oldCategory = oldTransaction.category;
-    
+
     // Bước 2: Tìm wallet và category mới (nếu có thay đổi)
     let newWallet: Wallet = oldWallet;
     if (dto.walletId && dto.walletId !== oldTransaction.walletId) {
@@ -379,7 +379,7 @@ export class TransactionService {
       } else {
         wallet.balance = currentBalance - amount; // Trừ tiền đã cộng
       }
-      
+
       await entityManager.save(Wallet, wallet);
       this.logger.debug(`Wallet balance restored: id=${wallet.id}, balance=${wallet.balance}`);
 
@@ -396,7 +396,7 @@ export class TransactionService {
         userId,
         transactionId: id,
         categoryId: transaction.category.id,
-        categoryName: transaction.category.name, 
+        categoryName: transaction.category.name,
         amount: transaction.amount,
         type: transaction.category.type,
         date: transaction.transactionDate,
@@ -405,5 +405,104 @@ export class TransactionService {
     } catch (error) {
       this.logger.error(`Failed to emit deletion event for transaction ${id}:`, error);
     }
+  }
+
+  /**
+   * Cascade delete tất cả transactions của một category
+   * Được gọi khi budget bị xóa
+   * @returns Object chứa số lượng transactions đã xóa và tổng số tiền rollback
+   */
+  async cascadeDeleteByCategory(
+    userId: string,
+    categoryName: string,
+  ): Promise<{ deletedCount: number; totalRollback: number }> {
+    this.logger.log(
+      `Starting cascade delete for userId=${userId}, category="${categoryName}"`,
+    );
+
+    // Tìm tất cả transactions của category
+    const transactions = await this.transactionRepository.find({
+      where: {
+        userId,
+        category: {
+          name: categoryName,
+        },
+      },
+      relations: ['wallet', 'category'],
+    });
+
+    if (transactions.length === 0) {
+      this.logger.log(`No transactions found for category: ${categoryName}`);
+      return { deletedCount: 0, totalRollback: 0 };
+    }
+
+    this.logger.log(
+      `Found ${transactions.length} transactions to delete for category: ${categoryName}`,
+    );
+
+    let deletedCount = 0;
+    let totalRollback = 0;
+
+    // Xóa từng transaction với rollback
+    for (const transaction of transactions) {
+      try {
+        // Wrap trong database transaction để đảm bảo atomic
+        await this.dataSource.transaction(async (entityManager) => {
+          const wallet = transaction.wallet;
+
+          if (!wallet) {
+            this.logger.warn(`Wallet not found for transaction ${transaction.id}, skipping`);
+            return;
+          }
+
+          const amount = Number(transaction.amount);
+          const currentBalance = Number(wallet.balance);
+
+          if (Number.isNaN(amount) || Number.isNaN(currentBalance)) {
+            this.logger.warn(`Invalid amount or balance for transaction ${transaction.id}, skipping`);
+            return;
+          }
+
+          // Rollback wallet balance
+          if (transaction.category.type === CategoryType.EXPENSE) {
+            wallet.balance = currentBalance + amount;
+            totalRollback += amount;
+            this.logger.debug(
+              `Rollback EXPENSE: transaction=${transaction.id}, wallet=${wallet.id}, +${amount}`,
+            );
+          } else {
+            wallet.balance = currentBalance - amount;
+            this.logger.debug(
+              `Rollback INCOME: transaction=${transaction.id}, wallet=${wallet.id}, -${amount}`,
+            );
+          }
+
+          // Save wallet
+          await entityManager.save(Wallet, wallet);
+
+          // Delete transaction
+          await entityManager.remove(Transaction, transaction);
+
+          deletedCount++;
+        });
+
+        this.logger.debug(
+          `Transaction deleted: id=${transaction.id}, amount=${transaction.amount}`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to delete transaction ${transaction.id}: ${error.message}`,
+          error.stack,
+        );
+        // Continue với transactions khác
+      }
+    }
+
+    this.logger.log(
+      `Cascade delete completed: deleted=${deletedCount}/${transactions.length} transactions, ` +
+      `totalRollback=${totalRollback} VND`,
+    );
+
+    return { deletedCount, totalRollback };
   }
 }

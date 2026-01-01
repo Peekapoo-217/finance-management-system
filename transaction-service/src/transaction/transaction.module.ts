@@ -6,6 +6,7 @@ import { Transaction } from './entities/transaction.entity';
 import { Wallet } from './entities/wallet.entity';
 import { Category } from './entities/category.entity';
 import { TransactionController } from './transaction.controller';
+import { TransactionEventsController } from './transaction-events.controller';
 import { TransactionService } from './transaction.service';
 import { redisConfig } from '../config/redis.config';
 import { AuthServiceGuard } from '../auth/guards/auth-service.guard';
@@ -17,7 +18,7 @@ import { ConsulClientService } from '../consul/consul-client.service';
     ClientsModule.register([redisConfig]),
     HttpModule,
   ],
-  controllers: [TransactionController],
+  controllers: [TransactionController, TransactionEventsController],
   providers: [TransactionService, AuthServiceGuard, ConsulClientService],
 })
-export class TransactionModule {}
+export class TransactionModule { }

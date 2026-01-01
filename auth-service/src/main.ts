@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import axios from 'axios';
 
 async function registerToConsul(
@@ -54,6 +55,18 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
 
+  // Swagger Configuration
+  const config = new DocumentBuilder()
+    .setTitle('Auth Service API')
+    .setDescription('API documentation for Authentication & User Management Service')
+    .setVersion('1.0')
+    .addTag('auth', 'Authentication endpoints (login, register)')
+    .addTag('profile', 'User profile management endpoints')
+    .addBearerAuth()
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api', app, document);
+
   app.enableCors();
   app.useGlobalPipes(new ValidationPipe());
 
@@ -68,6 +81,7 @@ async function bootstrap() {
   await app.listen(port);
   logger.log(`Auth Service is running on: http://localhost:${port}`);
   logger.log(`Health Check: http://localhost:${port}/auth/health`);
+  logger.log(`Swagger API Docs: http://localhost:${port}/api`);
 
   // Register to Consul
   await registerToConsul(serviceId, serviceName, port, registryUrl, logger);

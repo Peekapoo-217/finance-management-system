@@ -3,8 +3,9 @@ import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MicroserviceOptions } from '@nestjs/microservices';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import axios from 'axios';
-import { redisConfig } from './config/redis.config';
+import { redisMicroserviceConfig } from './config/redis.config';
 
 async function registerToConsul(
   serviceId: string,
@@ -59,8 +60,20 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
 
+  // Swagger Configuration
+  const config = new DocumentBuilder()
+    .setTitle('Budget Service API')
+    .setDescription('API documentation for Budget Management Service')
+    .setVersion('1.0')
+    .addTag('budgets', 'Budget management endpoints')
+    .addTag('categories', 'Category management endpoints')
+    .addBearerAuth()
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api', app, document);
+
   // Kết nối Redis microservice để lắng nghe events
-  app.connectMicroservice<MicroserviceOptions>(redisConfig);
+  app.connectMicroservice<MicroserviceOptions>(redisMicroserviceConfig);
   await app.startAllMicroservices();
   logger.log('Redis microservice connected for event listening');
 
@@ -72,6 +85,7 @@ async function bootstrap() {
   await app.listen(port);
   logger.log(`Budget Service is running on: http://localhost:${port}`);
   logger.log(`Health Check: http://localhost:${port}/health`);
+  logger.log(`Swagger API Docs: http://localhost:${port}/api`);
 
   // Register to Consul via registry service
   await registerToConsul(serviceId, serviceName, port, registryUrl, logger);

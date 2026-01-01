@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { ClientProxy } from '@nestjs/microservices';
 import { Budget } from './entities/budget.entity';
 import { CreateBudgetDto } from './dto/create-budget.dto';
 import { UpdateBudgetDto } from './dto/update-budget.dto';
@@ -13,9 +14,11 @@ export class BudgetService {
   constructor(
     @InjectRepository(Budget)
     private budgetRepository: Repository<Budget>,
-  ) {}
+    @Inject('REDIS_SERVICE')
+    private redisClient: ClientProxy,
+  ) { }
 
- async create(userId: string, dto: CreateBudgetDto): Promise<Budget> {
+  async create(userId: string, dto: CreateBudgetDto): Promise<Budget> {
     const budget = new Budget();
     budget.userId = userId;
     budget.categoryId = dto.categoryId;
@@ -26,23 +29,23 @@ export class BudgetService {
     return await this.budgetRepository.save(budget);
   }
 
- async findAll(userId: string): Promise<any[]> {
-  return await this.budgetRepository.find({
-    where: { userId },
-    relations: ['category'],  // Join để lấy tên category
-  });
-}
+  async findAll(userId: string): Promise<any[]> {
+    return await this.budgetRepository.find({
+      where: { userId },
+      relations: ['category'],  // Join để lấy tên category
+    });
+  }
 
   async findOne(id: string, userId: string): Promise<Budget> {
-  const budget = await this.budgetRepository.findOne({
-    where: { id, userId },
-    relations: ['category'],  // Join
-  });
-  if (!budget) throw new NotFoundException('Budget not found');
-  return budget;
-}
+    const budget = await this.budgetRepository.findOne({
+      where: { id, userId },
+      relations: ['category'],  // Join
+    });
+    if (!budget) throw new NotFoundException('Budget not found');
+    return budget;
+  }
 
- async update(id: string, userId: string, dto: UpdateBudgetDto): Promise<Budget> {
+  async update(id: string, userId: string, dto: UpdateBudgetDto): Promise<Budget> {
     const budget = await this.findOne(id, userId);
 
     if (dto.categoryId !== undefined) budget.categoryId = dto.categoryId;
@@ -53,8 +56,45 @@ export class BudgetService {
   }
 
   async remove(id: string, userId: string): Promise<void> {
+    // Load budget với category info TRƯỚC KHI XÓA
+    const budget = await this.budgetRepository.findOne({
+      where: { id, userId },
+      relations: ['category'],
+    });
+
+    if (!budget) {
+      throw new NotFoundException('Budget not found');
+    }
+
+    // Save info để emit event
+    const budgetData = {
+      budgetId: budget.id,
+      userId: budget.userId,
+      categoryId: budget.categoryId,
+      categoryName: budget.category?.name || '',
+      limitAmount: budget.limitAmount,
+      spentAmount: budget.spentAmount,
+      period: budget.period,
+    };
+
+    // Xóa budget
     const result = await this.budgetRepository.delete({ id, userId });
-    if (result.affected === 0) throw new NotFoundException('Budget not found');
+    if (result.affected === 0) {
+      throw new NotFoundException('Budget not found');
+    }
+
+    // Emit event để Transaction Service cascade delete
+    try {
+      this.redisClient.emit('budget.deleted', budgetData);
+      this.logger.log(
+        `Event emitted: budget.deleted for budgetId=${id}, category=${budgetData.categoryName}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to emit budget.deleted event: ${error.message}`,
+      );
+      // Log nhưng không throw - budget đã xóa rồi
+    }
   }
 
   async hasBudgetForCategory(userId: string, categoryName: string): Promise<boolean> {
@@ -81,7 +121,7 @@ export class BudgetService {
 
     // Parse categoryId to number
     const categoryIdNum = parseInt(categoryId, 10);
-    
+
     if (isNaN(categoryIdNum)) {
       this.logger.warn(`Invalid categoryId: ${categoryId}`);
       return;
@@ -89,9 +129,9 @@ export class BudgetService {
 
     // Filter theo userId và categoryId
     const budgets = await this.budgetRepository.find({
-      where: { 
+      where: {
         userId: userId,
-        categoryId: categoryIdNum 
+        categoryId: categoryIdNum
       },
     });
 
@@ -162,9 +202,9 @@ export class BudgetService {
 
     // Filter theo userId và categoryId
     const budgets = await this.budgetRepository.find({
-      where: { 
+      where: {
         userId: userId,
-        categoryId: categoryIdNum 
+        categoryId: categoryIdNum
       },
     });
 
@@ -195,14 +235,14 @@ export class BudgetService {
         const startOfWeek = new Date(now);
         startOfWeek.setDate(now.getDate() - now.getDay()); // Chủ nhật
         startOfWeek.setHours(0, 0, 0, 0);
-        
+
         const endOfWeek = new Date(startOfWeek);
         endOfWeek.setDate(startOfWeek.getDate() + 6); // Thứ 7
         endOfWeek.setHours(23, 59, 59, 999);
-        
+
         const transactionDateOnly = new Date(date);
         transactionDateOnly.setHours(0, 0, 0, 0);
-        
+
         const isInWeek = transactionDateOnly >= startOfWeek && transactionDateOnly <= endOfWeek;
         this.logger.log(
           `WEEKLY check: transaction=${transactionDateOnly.toISOString()}, startOfWeek=${startOfWeek.toISOString()}, endOfWeek=${endOfWeek.toISOString()}, isInWeek=${isInWeek}`
