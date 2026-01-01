@@ -1,5 +1,5 @@
 import { Controller, Logger, Inject } from '@nestjs/common';
-import { EventPattern, Payload } from '@nestjs/microservices';
+import { EventPattern, Payload, ClientProxy } from '@nestjs/microservices';
 import { BudgetService } from './budget.service';
 import { CategoryService } from '../category/category.service';
 
@@ -10,40 +10,46 @@ export class BudgetEventsController {
   constructor(
     private readonly budgetService: BudgetService,
     private readonly categoryService: CategoryService,
-  ) {}
+    @Inject('REDIS_SERVICE')
+    private readonly redisClient: ClientProxy,
+  ) { }
+
 
   @EventPattern('transaction.created')
   async handleTransactionCreated(@Payload() data: any) {
-    const { userId, categoryName, amount, type, date } = data;
+    const { userId, categoryName, amount, type, date, transactionId } = data;
 
     this.logger.log(
       `Received transaction.created event: userId=${userId}, categoryName=${categoryName}, amount=${amount} (type: ${typeof amount}), type=${type}`,
     );
 
-    // Chỉ xử lý chi tiêu
     if (type !== 'expense') {
       this.logger.debug('Skipping non-expense transaction');
       return;
     }
 
     try {
-      // Đảm bảo amount là number và dương
       const amountNum = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
       if (isNaN(amountNum) || amountNum <= 0) {
         this.logger.warn(`Invalid amount received: ${amount}, skipping budget update`);
         return;
       }
 
-      // Tìm category trong Budget Service database bằng name
       const category = await this.categoryService.findByName(categoryName);
-      
+
       if (!category) {
         this.logger.warn(`Category not found in Budget Service: ${categoryName}`);
+
+        this.redisClient.emit('transaction.budget_update_failed', {
+          transactionId: transactionId,
+          userId: userId,
+          categoryName: categoryName,
+          error: `Category "${categoryName}" not found in Budget Service`,
+          reason: 'category_not_found'
+        });
         return;
       }
 
-      // Update budget với categoryId của Budget Service
-      // Note: userId từ transaction-service là string, cần map sang number cho budget-service
       this.logger.log(
         `Updating budget: userId=${userId}, categoryId=${category.id}, amount=${amountNum}, date=${date}`
       );
@@ -54,8 +60,25 @@ export class BudgetEventsController {
         new Date(date),
       );
       this.logger.log(`Budget updated successfully for category: ${categoryName}, added amount: ${amountNum}`);
+
+      this.redisClient.emit('transaction.budget_updated', {
+        transactionId: transactionId,
+        userId: userId,
+        categoryName: categoryName,
+        amount: amountNum,
+        success: true
+      });
+
     } catch (error) {
       this.logger.error(`Failed to update budget: ${error.message}`, error.stack);
+
+      this.redisClient.emit('transaction.budget_update_failed', {
+        transactionId: transactionId,
+        userId: userId,
+        categoryName: categoryName,
+        error: error.message,
+        reason: 'update_failed'
+      });
     }
   }
 

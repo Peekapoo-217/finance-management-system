@@ -85,36 +85,36 @@ export class TransactionService {
       throw new BadRequestException('Insufficient wallet balance');
     }
 
-    // Validate: Nếu là expense, phải có budget trước
-    if (category.type === CategoryType.EXPENSE) {
-      try {
-        const budgetServiceUrl = await this.consulClient.resolveService('budget-service');
+    // // Validate: Nếu là expense, phải có budget trước
+    // if (category.type === CategoryType.EXPENSE) {
+    //   try {
+    //     const budgetServiceUrl = await this.consulClient.resolveService('budget-service');
 
-        // Pass user's token để budget-service có thể lấy userId và check budget của đúng user
-        const checkResponse = await firstValueFrom(
-          this.httpService.get(`${budgetServiceUrl}/budgets/check/${encodeURIComponent(category.name)}`, {
-            headers: {
-              Authorization: authToken || 'Bearer dummy-token',
-              'Content-Type': 'application/json',
-            },
-          }),
-        );
+    //     // Pass user's token để budget-service có thể lấy userId và check budget của đúng user
+    //     const checkResponse = await firstValueFrom(
+    //       this.httpService.get(`${budgetServiceUrl}/budgets/check/${encodeURIComponent(category.name)}`, {
+    //         headers: {
+    //           Authorization: authToken || 'Bearer dummy-token',
+    //           'Content-Type': 'application/json',
+    //         },
+    //       }),
+    //     );
 
-        const hasBudget = checkResponse.data?.hasBudget;
-        if (!hasBudget) {
-          throw new BadRequestException(
-            `Danh mục "${category.name}" chưa có ngân sách. Vui lòng tạo ngân sách trước khi thêm giao dịch.`
-          );
-        }
-      } catch (error: any) {
-        // Nếu lỗi là BadRequestException từ validation -> throw lại
-        if (error.response?.status === 400 || error.message?.includes('chưa có ngân sách')) {
-          throw error;
-        }
-        // Nếu lỗi khác (network, service unavailable) -> log và cho phép tạo transaction
-        this.logger.warn(`Failed to check budget for category ${category.name}: ${error.message}`);
-      }
-    }
+    //     const hasBudget = checkResponse.data?.hasBudget;
+    //     if (!hasBudget) {
+    //       throw new BadRequestException(
+    //         `Danh mục "${category.name}" chưa có ngân sách. Vui lòng tạo ngân sách trước khi thêm giao dịch.`
+    //       );
+    //     }
+    //   } catch (error: any) {
+    //     // Nếu lỗi là BadRequestException từ validation -> throw lại
+    //     if (error.response?.status === 400 || error.message?.includes('chưa có ngân sách')) {
+    //       throw error;
+    //     }
+    //     // Nếu lỗi khác (network, service unavailable) -> log và cho phép tạo transaction
+    //     this.logger.warn(`Failed to check budget for category ${category.name}: ${error.message}`);
+    //   }
+    // }
 
     this.logger.log(`Creating transaction: userId=${userId}, amount=${dto.amount}, type=${category.type}`);
 
