@@ -99,23 +99,33 @@ export class TransactionService {
       const saved = await entityManager.save(Transaction, transaction);
       this.logger.debug(`Transaction saved: id=${saved.id}`);
 
-      // Bước 2: Cập nhật wallet balance
+      // Bước 2: Cập nhật wallet balance (ATOMIC UPDATE để tránh race condition)
       const amount = Number(dto.amount);
-      const currentBalance = Number(wallet.balance);
-      if (Number.isNaN(amount) || Number.isNaN(currentBalance)) {
-        throw new BadRequestException('Invalid amount or wallet balance');
+      if (Number.isNaN(amount)) {
+        throw new BadRequestException('Invalid amount');
       }
 
-      const oldBalance = currentBalance;
+      // Atomic SQL update: Update trực tiếp trong database, không qua memory
       if (category.type === CategoryType.EXPENSE) {
-        wallet.balance = currentBalance - amount;
+        await entityManager
+          .createQueryBuilder()
+          .update(Wallet)
+          .set({ balance: () => 'balance - :amount' })
+          .setParameter('amount', amount)
+          .where('id = :walletId', { walletId: wallet.id })
+          .execute();
       } else {
-        wallet.balance = currentBalance + amount;
+        await entityManager
+          .createQueryBuilder()
+          .update(Wallet)
+          .set({ balance: () => 'balance + :amount' })
+          .setParameter('amount', amount)
+          .where('id = :walletId', { walletId: wallet.id })
+          .execute();
       }
 
-      await entityManager.save(Wallet, wallet);
       this.logger.debug(
-        `Wallet updated: id=${wallet.id}, oldBalance=${oldBalance}, newBalance=${wallet.balance}`
+        `Wallet updated atomically: id=${wallet.id}, ${category.type === CategoryType.EXPENSE ? 'decreased' : 'increased'} by ${amount}`
       );
 
       return saved;
@@ -254,33 +264,64 @@ export class TransactionService {
 
     // WRAP TRONG DATABASE TRANSACTION để đảm bảo atomic operations
     const result = await this.dataSource.transaction(async (entityManager) => {
-      // Bước 1: Rollback wallet balance cũ
-      const oldWalletBalance = Number(oldWallet.balance);
+      // Bước 1: Rollback wallet balance cũ (ATOMIC)
       if (oldCategory.type === CategoryType.EXPENSE) {
-        oldWallet.balance = oldWalletBalance + oldAmount; // Hoàn trả tiền
+        await entityManager
+          .createQueryBuilder()
+          .update(Wallet)
+          .set({ balance: () => 'balance + :amount' })
+          .setParameter('amount', oldAmount)
+          .where('id = :walletId', { walletId: oldWallet.id })
+          .execute();
       } else {
-        oldWallet.balance = oldWalletBalance - oldAmount; // Trừ tiền đã cộng
+        await entityManager
+          .createQueryBuilder()
+          .update(Wallet)
+          .set({ balance: () => 'balance - :amount' })
+          .setParameter('amount', oldAmount)
+          .where('id = :walletId', { walletId: oldWallet.id })
+          .execute();
       }
-      await entityManager.save(Wallet, oldWallet);
 
-      // Bước 2: Cập nhật wallet balance mới (nếu wallet khác)
+      // Bước 2: Cập nhật wallet balance mới (ATOMIC)
       if (newWallet.id !== oldWallet.id) {
-        const newWalletBalance = Number(newWallet.balance);
+        // Khác wallet: Apply new amount vào wallet mới
         if (newCategory.type === CategoryType.EXPENSE) {
-          newWallet.balance = newWalletBalance - newAmount;
+          await entityManager
+            .createQueryBuilder()
+            .update(Wallet)
+            .set({ balance: () => 'balance - :amount' })
+            .setParameter('amount', newAmount)
+            .where('id = :walletId', { walletId: newWallet.id })
+            .execute();
         } else {
-          newWallet.balance = newWalletBalance + newAmount;
+          await entityManager
+            .createQueryBuilder()
+            .update(Wallet)
+            .set({ balance: () => 'balance + :amount' })
+            .setParameter('amount', newAmount)
+            .where('id = :walletId', { walletId: newWallet.id })
+            .execute();
         }
-        await entityManager.save(Wallet, newWallet);
       } else {
-        // Cùng wallet, cập nhật balance dựa trên sự khác biệt
-        const currentBalance = Number(newWallet.balance);
+        // Cùng wallet: Apply new amount (đã rollback rồi)
         if (newCategory.type === CategoryType.EXPENSE) {
-          newWallet.balance = currentBalance - newAmount;
+          await entityManager
+            .createQueryBuilder()
+            .update(Wallet)
+            .set({ balance: () => 'balance - :amount' })
+            .setParameter('amount', newAmount)
+            .where('id = :walletId', { walletId: newWallet.id })
+            .execute();
         } else {
-          newWallet.balance = currentBalance + newAmount;
+          await entityManager
+            .createQueryBuilder()
+            .update(Wallet)
+            .set({ balance: () => 'balance + :amount' })
+            .setParameter('amount', newAmount)
+            .where('id = :walletId', { walletId: newWallet.id })
+            .execute();
         }
-        await entityManager.save(Wallet, newWallet);
       }
 
       // Bước 3: Cập nhật transaction
@@ -427,29 +468,39 @@ export class TransactionService {
           }
 
           const amount = Number(transaction.amount);
-          const currentBalance = Number(wallet.balance);
 
-          if (Number.isNaN(amount) || Number.isNaN(currentBalance)) {
-            this.logger.warn(`Invalid amount or balance for transaction ${transaction.id}, skipping`);
+          if (Number.isNaN(amount)) {
+            this.logger.warn(`Invalid amount for transaction ${transaction.id}, skipping`);
             return;
           }
 
-          // Rollback wallet balance
+          // Rollback wallet balance (ATOMIC)
           if (transaction.category.type === CategoryType.EXPENSE) {
-            wallet.balance = currentBalance + amount;
+            await entityManager
+              .createQueryBuilder()
+              .update(Wallet)
+              .set({ balance: () => 'balance + :amount' })
+              .setParameter('amount', amount)
+              .where('id = :walletId', { walletId: wallet.id })
+              .execute();
+
             totalRollback += amount;
             this.logger.debug(
-              `Rollback EXPENSE: transaction=${transaction.id}, wallet=${wallet.id}, +${amount}`,
+              `Rollback EXPENSE atomically: transaction=${transaction.id}, wallet=${wallet.id}, +${amount}`,
             );
           } else {
-            wallet.balance = currentBalance - amount;
+            await entityManager
+              .createQueryBuilder()
+              .update(Wallet)
+              .set({ balance: () => 'balance - :amount' })
+              .setParameter('amount', amount)
+              .where('id = :walletId', { walletId: wallet.id })
+              .execute();
+
             this.logger.debug(
-              `Rollback INCOME: transaction=${transaction.id}, wallet=${wallet.id}, -${amount}`,
+              `Rollback INCOME atomically: transaction=${transaction.id}, wallet=${wallet.id}, -${amount}`,
             );
           }
-
-          // Save wallet
-          await entityManager.save(Wallet, wallet);
 
           // Delete transaction
           await entityManager.remove(Transaction, transaction);

@@ -152,13 +152,21 @@ export class BudgetService {
 
       if (isInPeriod) {
         const oldSpentAmount = Number(budget.spentAmount);
+
+        // Atomic SQL update: Tránh race condition khi nhiều transactions cùng update
+        await this.budgetRepository
+          .createQueryBuilder()
+          .update(Budget)
+          .set({ spentAmount: () => 'spentAmount + :amount' })
+          .setParameter('amount', amountNum)
+          .where('id = :budgetId', { budgetId: budget.id })
+          .execute();
+
         const newSpentAmount = oldSpentAmount + amountNum;
-        budget.spentAmount = newSpentAmount;
-        await this.budgetRepository.save(budget);
         updated = true;
 
         this.logger.log(
-          `Budget ${budget.id} updated: spentAmount ${oldSpentAmount} -> ${newSpentAmount} (added ${amountNum})`
+          `Budget ${budget.id} updated atomically: spentAmount ${oldSpentAmount} -> ${newSpentAmount} (added ${amountNum})`
         );
 
         if (newSpentAmount > budget.limitAmount) {
@@ -209,10 +217,21 @@ export class BudgetService {
 
     for (const budget of budgets) {
       if (this.isDateInPeriod(transactionDate, budget.period)) {
-        budget.spentAmount = Math.max(0, budget.spentAmount - amount);
-        await this.budgetRepository.save(budget);
+        const oldSpentAmount = budget.spentAmount;
+
+        // Atomic SQL update với GREATEST để đảm bảo không bị âm
+        await this.budgetRepository
+          .createQueryBuilder()
+          .update(Budget)
+          .set({ spentAmount: () => 'GREATEST(0, spentAmount - :amount)' })
+          .setParameter('amount', amount)
+          .where('id = :budgetId', { budgetId: budget.id })
+          .execute();
+
+        const newSpentAmount = Math.max(0, oldSpentAmount - amount);
+
         this.logger.log(
-          `Rolled back budget spent: Budget ${budget.id}, -${amount}, new spent=${budget.spentAmount}`,
+          `Rolled back budget atomically: Budget ${budget.id}, -${amount}, spent: ${oldSpentAmount} -> ${newSpentAmount}`,
         );
         break;
       }
