@@ -2,6 +2,7 @@ import { Controller, Logger, Inject } from '@nestjs/common';
 import { EventPattern, Payload, ClientProxy } from '@nestjs/microservices';
 import { BudgetService } from './budget.service';
 import { CategoryService } from '../category/category.service';
+import { EventEmitterService } from '../common/event-emitter.service';
 
 @Controller()
 export class BudgetEventsController {
@@ -12,6 +13,7 @@ export class BudgetEventsController {
     private readonly categoryService: CategoryService,
     @Inject('REDIS_SERVICE')
     private readonly redisClient: ClientProxy,
+    private readonly eventEmitter: EventEmitterService,
   ) { }
 
 
@@ -40,7 +42,7 @@ export class BudgetEventsController {
       if (!category) {
         this.logger.warn(`Category not found in Budget Service: ${categoryName}`);
 
-        this.redisClient.emit('transaction.budget_update_failed', {
+        await this.eventEmitter.emitWithRetry('transaction.budget_update_failed', {
           transactionId: transactionId,
           userId: userId,
           categoryName: categoryName,
@@ -61,7 +63,7 @@ export class BudgetEventsController {
       );
       this.logger.log(`Budget updated successfully for category: ${categoryName}, added amount: ${amountNum}`);
 
-      this.redisClient.emit('transaction.budget_updated', {
+      await this.eventEmitter.emitWithRetry('transaction.budget_updated', {
         transactionId: transactionId,
         userId: userId,
         categoryName: categoryName,
@@ -72,7 +74,7 @@ export class BudgetEventsController {
     } catch (error) {
       this.logger.error(`Failed to update budget: ${error.message}`, error.stack);
 
-      this.redisClient.emit('transaction.budget_update_failed', {
+      await this.eventEmitter.emitWithRetry('transaction.budget_update_failed', {
         transactionId: transactionId,
         userId: userId,
         categoryName: categoryName,

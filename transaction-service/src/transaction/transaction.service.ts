@@ -11,6 +11,7 @@ import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { CategoryType } from './enums';
 import { ConsulClientService } from '../consul/consul-client.service';
+import { EventEmitterService } from '../common/event-emitter.service';
 
 @Injectable()
 export class TransactionService {
@@ -28,10 +29,10 @@ export class TransactionService {
     private dataSource: DataSource,
     private httpService: HttpService,
     private consulClient: ConsulClientService,
+    private eventEmitter: EventEmitterService,
   ) { }
 
   async create(userId: string, dto: CreateTransactionDto, authToken?: string): Promise<Transaction> {
-    // Chọn ví: ưu tiên walletId, nếu không có sẽ lấy ví đầu tiên của user
     let wallet: Wallet | null = null;
     if (dto.walletId) {
       wallet = await this.walletRepository.findOne({
@@ -46,7 +47,6 @@ export class TransactionService {
       if (!wallet) throw new NotFoundException('No wallet available for this user');
     }
 
-    // Xác định category: ưu tiên categoryId, nếu không có thì dùng categoryName + categoryType
     let category: Category | null = null;
 
     const looksLikeUuid = (val: string | undefined) =>
@@ -59,7 +59,7 @@ export class TransactionService {
       if (!category) throw new NotFoundException('Category not found');
     }
 
-    // Nếu không có category hoặc categoryId không phải UUID -> dùng categoryName + categoryType
+
     if (!category) {
       if (!dto.categoryName || !dto.categoryType) {
         throw new BadRequestException('categoryName and categoryType are required when categoryId is not provided');
@@ -84,38 +84,6 @@ export class TransactionService {
     if (category.type === CategoryType.EXPENSE && wallet.balance < dto.amount) {
       throw new BadRequestException('Insufficient wallet balance');
     }
-
-    // // Validate: Nếu là expense, phải có budget trước
-    // if (category.type === CategoryType.EXPENSE) {
-    //   try {
-    //     const budgetServiceUrl = await this.consulClient.resolveService('budget-service');
-
-    //     // Pass user's token để budget-service có thể lấy userId và check budget của đúng user
-    //     const checkResponse = await firstValueFrom(
-    //       this.httpService.get(`${budgetServiceUrl}/budgets/check/${encodeURIComponent(category.name)}`, {
-    //         headers: {
-    //           Authorization: authToken || 'Bearer dummy-token',
-    //           'Content-Type': 'application/json',
-    //         },
-    //       }),
-    //     );
-
-    //     const hasBudget = checkResponse.data?.hasBudget;
-    //     if (!hasBudget) {
-    //       throw new BadRequestException(
-    //         `Danh mục "${category.name}" chưa có ngân sách. Vui lòng tạo ngân sách trước khi thêm giao dịch.`
-    //       );
-    //     }
-    //   } catch (error: any) {
-    //     // Nếu lỗi là BadRequestException từ validation -> throw lại
-    //     if (error.response?.status === 400 || error.message?.includes('chưa có ngân sách')) {
-    //       throw error;
-    //     }
-    //     // Nếu lỗi khác (network, service unavailable) -> log và cho phép tạo transaction
-    //     this.logger.warn(`Failed to check budget for category ${category.name}: ${error.message}`);
-    //   }
-    // }
-
     this.logger.log(`Creating transaction: userId=${userId}, amount=${dto.amount}, type=${category.type}`);
 
     // WRAP TRONG DATABASE TRANSACTION để đảm bảo atomic operations
@@ -150,26 +118,25 @@ export class TransactionService {
         `Wallet updated: id=${wallet.id}, oldBalance=${oldBalance}, newBalance=${wallet.balance}`
       );
 
-      // Nếu đến đây không có lỗi -> COMMIT cả 2 operations
-      // Nếu có lỗi bất kỳ -> ROLLBACK tất cả
       return saved;
     });
 
     // Phát event qua Redis cho budget-service (sau khi DB transaction commit thành công)
-    try {
-      this.redisClient.emit('transaction.created', {
-        userId,
-        categoryId: dto.categoryId,
-        categoryName: category.name, // THÊM: category name để Budget Service match
-        amount: dto.amount,
-        type: category.type,
-        date: dto.transactionDate,
-        transactionId: result.id,
-      });
-      this.logger.log(`Event emitted: transaction.created for id=${result.id}, category=${category.name}`);
-    } catch (error) {
-      // Log nhưng không throw - event emission không nên fail toàn bộ operation
-      this.logger.error(`Failed to emit event for transaction ${result.id}:`, error);
+    const eventEmitted = await this.eventEmitter.emitWithRetry('transaction.created', {
+      userId,
+      categoryId: dto.categoryId,
+      categoryName: category.name,
+      amount: dto.amount,
+      type: category.type,
+      date: dto.transactionDate,
+      transactionId: result.id,
+    });
+
+    if (!eventEmitted) {
+      this.logger.warn(
+        `WARNING: Event emission failed for transaction ${result.id}. ` +
+        `Budget Service may not be updated. Manual reconciliation may be required.`
+      );
     }
 
     return result;
@@ -330,26 +297,28 @@ export class TransactionService {
     });
 
     // Emit event để budget-service cập nhật
-    try {
-      this.redisClient.emit('transaction.updated', {
-        userId,
-        transactionId: id,
-        oldData: {
-          categoryName: oldCategoryName,
-          amount: oldAmount,
-          type: oldCategoryType,
-          date: oldDate,
-        },
-        newData: {
-          categoryName: newCategory.name,
-          amount: newAmount,
-          type: newCategory.type,
-          date: newDate,
-        },
-      });
-      this.logger.log(`Event emitted: transaction.updated for id=${id}`);
-    } catch (error) {
-      this.logger.error(`Failed to emit update event:`, error);
+    const eventEmitted = await this.eventEmitter.emitWithRetry('transaction.updated', {
+      userId,
+      transactionId: id,
+      oldData: {
+        categoryName: oldCategoryName,
+        amount: oldAmount,
+        type: oldCategoryType,
+        date: oldDate,
+      },
+      newData: {
+        categoryName: newCategory.name,
+        amount: newAmount,
+        type: newCategory.type,
+        date: newDate,
+      },
+    });
+
+    if (!eventEmitted) {
+      this.logger.warn(
+        `WARNING: Event emission failed for transaction update ${id}. ` +
+        `Budget Service may not be updated. Manual reconciliation may be required.`
+      );
     }
 
     return result;
@@ -391,19 +360,21 @@ export class TransactionService {
     });
 
     // Emit event để các service khác biết (optional)
-    try {
-      this.redisClient.emit('transaction.deleted', {
-        userId,
-        transactionId: id,
-        categoryId: transaction.category.id,
-        categoryName: transaction.category.name,
-        amount: transaction.amount,
-        type: transaction.category.type,
-        date: transaction.transactionDate,
-      });
-      this.logger.log(`Event emitted: transaction.deleted for id=${id}, category=${transaction.category.name}`);
-    } catch (error) {
-      this.logger.error(`Failed to emit deletion event for transaction ${id}:`, error);
+    const eventEmitted = await this.eventEmitter.emitWithRetry('transaction.deleted', {
+      userId,
+      transactionId: id,
+      categoryId: transaction.category.id,
+      categoryName: transaction.category.name,
+      amount: transaction.amount,
+      type: transaction.category.type,
+      date: transaction.transactionDate,
+    });
+
+    if (!eventEmitted) {
+      this.logger.warn(
+        `WARNING: Event emission failed for transaction deletion ${id}. ` +
+        `Budget Service may not be updated. Manual reconciliation may be required.`
+      );
     }
   }
 

@@ -11,6 +11,7 @@ import { TransactionService } from './transaction.service';
 import { redisConfig } from '../config/redis.config';
 import { AuthServiceGuard } from '../auth/guards/auth-service.guard';
 import { ConsulClientService } from '../consul/consul-client.service';
+import { EventEmitterService } from '../common/event-emitter.service';
 
 @Module({
   imports: [
@@ -19,6 +20,6 @@ import { ConsulClientService } from '../consul/consul-client.service';
     HttpModule,
   ],
   controllers: [TransactionController, TransactionEventsController],
-  providers: [TransactionService, AuthServiceGuard, ConsulClientService],
+  providers: [TransactionService, AuthServiceGuard, ConsulClientService, EventEmitterService],
 })
 export class TransactionModule { }

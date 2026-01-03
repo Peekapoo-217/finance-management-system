@@ -6,6 +6,7 @@ import { Budget } from './entities/budget.entity';
 import { CreateBudgetDto } from './dto/create-budget.dto';
 import { UpdateBudgetDto } from './dto/update-budget.dto';
 import { BudgetPeriod } from './enums/budget-period.enum';
+import { EventEmitterService } from '../common/event-emitter.service';
 
 @Injectable()
 export class BudgetService {
@@ -16,6 +17,7 @@ export class BudgetService {
     private budgetRepository: Repository<Budget>,
     @Inject('REDIS_SERVICE')
     private redisClient: ClientProxy,
+    private eventEmitter: EventEmitterService,
   ) { }
 
   async create(userId: string, dto: CreateBudgetDto): Promise<Budget> {
@@ -84,16 +86,13 @@ export class BudgetService {
     }
 
     // Emit event để Transaction Service cascade delete
-    try {
-      this.redisClient.emit('budget.deleted', budgetData);
-      this.logger.log(
-        `Event emitted: budget.deleted for budgetId=${id}, category=${budgetData.categoryName}`,
+    const eventEmitted = await this.eventEmitter.emitWithRetry('budget.deleted', budgetData);
+
+    if (!eventEmitted) {
+      this.logger.warn(
+        `WARNING: Event emission failed for budget deletion ${id}. ` +
+        `Transaction Service may not cascade delete. Manual cleanup may be required.`
       );
-    } catch (error) {
-      this.logger.error(
-        `Failed to emit budget.deleted event: ${error.message}`,
-      );
-      // Log nhưng không throw - budget đã xóa rồi
     }
   }
 
