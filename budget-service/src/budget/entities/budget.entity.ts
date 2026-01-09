@@ -1,9 +1,10 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, BeforeInsert } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, BeforeInsert, Index } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { Category } from '../../category/entities/category.entity';
 import { BudgetPeriod } from '../enums/budget-period.enum';
 
 @Entity('budgets')
+@Index(['userId', 'categoryId'], { unique: true })
 export class Budget {
   @PrimaryColumn({ type: 'varchar', length: 36 })
   id!: string;

@@ -21,6 +21,22 @@ export class BudgetService {
   ) { }
 
   async create(userId: string, dto: CreateBudgetDto): Promise<Budget> {
+    // Check for duplicate budget - one budget per category
+    const existingBudget = await this.budgetRepository.findOne({
+      where: {
+        userId: userId,
+        categoryId: dto.categoryId,
+      },
+      relations: ['category'],
+    });
+
+    if (existingBudget) {
+      throw new NotFoundException(
+        `Danh mục "${existingBudget.category?.name || 'này'}" đã có ngân sách. ` +
+        `Mỗi danh mục chỉ được tạo một ngân sách duy nhất.`
+      );
+    }
+
     const budget = new Budget();
     budget.userId = userId;
     budget.categoryId = dto.categoryId;

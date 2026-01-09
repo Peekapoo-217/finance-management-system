@@ -105,7 +105,6 @@ export class TransactionService {
         throw new BadRequestException('Invalid amount');
       }
 
-      // Atomic SQL update: Update trực tiếp trong database, không qua memory
       if (category.type === CategoryType.EXPENSE) {
         await entityManager
           .createQueryBuilder()

@@ -10,7 +10,7 @@ export class ConsulClientService {
   constructor(
     private configService: ConfigService,
     private httpService: HttpService,
-  ) {}
+  ) { }
 
   async resolveService(serviceName: string): Promise<string> {
     try {
